@@ -100,10 +100,6 @@ class RouteTimePredictor:
         
         self.logger.info(f"Training metrics: {self.metrics}")
         
-        # Сохранение модели если требуется
-        if save_model and model_storage:
-            self._save_model_to_storage(model_storage, model_name)
-        
         return self.metrics
     
     def _save_model_to_storage(self, model_storage, model_name: str):

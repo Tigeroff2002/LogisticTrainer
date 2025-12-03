@@ -1,11 +1,9 @@
 import sys
 import logging
-import tempfile
-import os
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Dict
 import pandas as pd
 
 from app.rest_models.prediction_request import PredictionRequest
@@ -35,8 +33,56 @@ config = Config()
 db_service = DatabaseService(config)
 storage = ModelStorage(config)
 is_training = False
-predictor = None
-current_model_name = None
+
+# Храним все модели в памяти: имя_модели -> RouteTimePredictor
+loaded_models: Dict[str, RouteTimePredictor] = {}
+current_model_name: Optional[str] = None
+
+async def load_all_models():
+    """Загрузка всех моделей из хранилища в память"""
+    global loaded_models, current_model_name
+    
+    try:
+        models = storage.list_models()
+        logger.info(f"Found {len(models)} models in storage: {models}")
+        
+        if not models:
+            logger.info("No models found in storage")
+            return
+        
+        logger.info(f"Loading {len(models)} models into memory...")
+        
+        for model_name in models:
+            try:
+                logger.info(f"Attempting to load model: {model_name}")
+                predictor = RouteTimePredictor()
+                metadata = storage.load_model_to_predictor(model_name, predictor)
+                loaded_models[model_name] = predictor
+                logger.info(f"Successfully loaded model: {model_name}")
+                logger.info(f"Model {model_name} metadata: {metadata}")
+            except Exception as e:
+                logger.error(f"Failed to load model {model_name}: {e}", exc_info=True)
+        
+        # Устанавливаем последнюю модель как текущую
+        if models:
+            current_model_name = models[-1]
+            logger.info(f"Current model set to: {current_model_name}")
+            
+    except Exception as e:
+        logger.error(f"Error loading models: {e}", exc_info=True)
+
+def get_current_predictor():
+    """Получение текущего предиктора"""
+    global loaded_models, current_model_name
+    
+    if current_model_name and current_model_name in loaded_models:
+        return loaded_models[current_model_name]
+    elif loaded_models:
+        # Возвращаем первую доступную модель
+        first_model_name = list(loaded_models.keys())[0]
+        return loaded_models[first_model_name]
+    else:
+        return None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -44,24 +90,8 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ML Trainer Service")
     await db_service.connect()
     
-    # Инициализируем предсказатель
-    global predictor
-    predictor = RouteTimePredictor(
-        model_type=config.model.model_type,
-        random_state=config.model.random_state
-    )
-    
-    # Загружаем последнюю модель при старте, если она существует
-    try:
-        models = storage.list_models()
-        if models:
-            latest_model = models[-1]
-            await load_model(latest_model)
-            logger.info(f"Loaded latest model on startup: {latest_model}")
-        else:
-            logger.info("No models available on startup")
-    except Exception as e:
-        logger.warning(f"Could not load model on startup: {e}")
+    # Загружаем все модели в память
+    await load_all_models()
     
     logger.info("Service started successfully")
     
@@ -76,33 +106,6 @@ app = FastAPI(
     description="Service for training route time prediction models",
     lifespan=lifespan
 )
-
-async def load_model(model_name: str):
-    """Загрузка модели из хранилища"""
-    global predictor, current_model_name
-    
-    try:
-        # Скачиваем модель из хранилища во временный файл
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pkl') as tmp_file:
-            model_bytes = storage.get_model(model_name)
-            if not model_bytes:
-                raise HTTPException(status_code=404, detail=f"Model '{model_name}' not found in storage")
-            
-            tmp_file.write(model_bytes)
-            tmp_path = tmp_file.name
-        
-        # Загружаем модель
-        predictor.load_model(tmp_path)
-        current_model_name = model_name
-        
-        # Удаляем временный файл
-        os.unlink(tmp_path)
-        
-        logger.info(f"Successfully loaded model: {model_name}")
-        
-    except Exception as e:
-        logger.error(f"Failed to load model {model_name}: {e}")
-        raise
 
 @app.post("/train", response_model=TrainingResponse)
 async def train_model(background_tasks: BackgroundTasks):
@@ -122,6 +125,54 @@ async def train_model(background_tasks: BackgroundTasks):
         message="Model training started in background"
     )
 
+async def train_model_task():
+    """Фоновая задача обучения модели"""
+    global is_training, loaded_models, current_model_name
+    
+    try:
+        is_training = True
+        logger.info("=== STARTING MODEL TRAINING ===")
+        
+        # 1. Получение данных
+        logger.info("Step 1: Fetching training data from database")
+        df = await db_service.get_training_data()
+        
+        if df.empty:
+            logger.error("No training data available")
+            return
+        
+        # 2. Обучение модели
+        logger.info("Step 2: Training the model")
+        predictor = RouteTimePredictor(
+            model_type=config.model.model_type,
+            random_state=config.model.random_state
+        )
+        
+        metrics = predictor.train(df, test_size=config.model.test_size)
+        
+        # 3. Подготовка метаданных
+        logger.info("Step 3: Preparing model metadata")
+        metadata = predictor.get_model_metadata(metrics)
+        
+        # 4. Сохранение модели с ротацией
+        logger.info("Step 4: Saving model with rotation")
+        model_name = storage.rotate_models(predictor, metadata)
+        current_model_name = model_name
+        
+        # 5. Загружаем новую модель в память
+        # Сохраняем текущий предиктор в loaded_models
+        loaded_models[model_name] = predictor
+        
+        logger.info("=== MODEL TRAINING COMPLETED SUCCESSFULLY ===")
+        logger.info(f"Final metrics: R² = {metrics['r2']:.4f}, RMSE = {metrics['rmse']:.2f}")
+        logger.info(f"New model '{model_name}' saved and loaded to memory")
+        
+    except Exception as e:
+        logger.error(f"Training failed: {e}")
+        raise
+    finally:
+        is_training = False
+
 @app.get("/training-status")
 async def get_training_status():
     """Статус обучения модели"""
@@ -134,16 +185,28 @@ async def get_training_status():
 async def list_models():
     """Список доступных моделей"""
     models = storage.list_models()
+    loaded_count = len(loaded_models)
+    
     return {
         "models": models,
         "count": len(models),
-        "current_model": current_model_name
+        "loaded_count": loaded_count,
+        "current_model": current_model_name,
+        "loaded_models": list(loaded_models.keys())
     }
 
 @app.delete("/models")
-async def list_models():
+async def delete_models():
     """Удаление всех моделей"""
-    return storage.delete_all_models()
+    global loaded_models, current_model_name
+    
+    result = storage.delete_all_models()
+    
+    # Очищаем модели из памяти
+    loaded_models.clear()
+    current_model_name = None
+    
+    return result
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_route_time(request: PredictionRequest):
@@ -152,21 +215,14 @@ async def predict_route_time(request: PredictionRequest):
     
     Использует последнюю доступную модель для предсказания времени поездки.
     """
-    global predictor, current_model_name
-    
     try:
-        # Проверяем, загружена ли модель
+        predictor = get_current_predictor()
+        
         if predictor is None or predictor.model is None:
-            # Пытаемся загрузить последнюю модель
-            models = storage.list_models()
-            if not models:
-                raise HTTPException(
-                    status_code=404, 
-                    detail="No trained models available. Please train a model first."
-                )
-            
-            latest_model = models[-1]
-            await load_model(latest_model)
+            raise HTTPException(
+                status_code=404, 
+                detail="No trained models available. Please train a model first."
+            )
         
         # Подготавливаем данные для предсказания
         input_data = {
@@ -198,6 +254,21 @@ async def predict_route_time(request: PredictionRequest):
             detail=f"Prediction failed: {str(e)}"
         )
 
+@app.get("/model/current")
+async def get_current_model_info():
+    """Информация о текущей модели"""
+    predictor = get_current_predictor()
+    
+    if not predictor:
+        raise HTTPException(status_code=404, detail="No model loaded")
+    
+    return {
+        "model_name": current_model_name,
+        "feature_columns": predictor.feature_columns if predictor.feature_columns else [],
+        "training_date": predictor.training_date.isoformat() if predictor.training_date else None,
+        "metrics": predictor.metrics
+    }
+
 @app.get("/")
 async def root():
     """Корневой endpoint с информацией о сервисе"""
@@ -207,9 +278,9 @@ async def root():
         "endpoints": {
             "train": "POST /train - Train a new model",
             "predict": "POST /predict - Make a prediction (uses latest model)",
-            "predict_with_model": "POST /predict/{model_name} - Make prediction with specific model",
             "training_status": "GET /training-status - Check training status",
             "list_models": "GET /models - List available models",
+            "delete_models": "DELETE /models - Delete all models",
             "current_model": "GET /model/current - Get current model info",
             "load_model": "POST /model/load/{model_name} - Load specific model",
             "health": "GET /health - Health check"
@@ -228,46 +299,3 @@ if __name__ == "__main__":
     )
     server = uvicorn.Server(config_server)
     server.run()
-
-async def train_model_task():
-    """Фоновая задача обучения модели"""
-    global is_training, predictor, current_model_name
-    
-    try:
-        is_training = True
-        logger.info("=== STARTING MODEL TRAINING ===")
-        
-        # 1. Получение данных
-        logger.info("Step 1: Fetching training data from database")
-        df = await db_service.get_training_data()
-        
-        if df.empty:
-            logger.error("No training data available")
-            return
-        
-        # 2. Обучение модели
-        logger.info("Step 2: Training the model")
-        predictor = RouteTimePredictor(
-            model_type=config.model.model_type,
-            random_state=config.model.random_state
-        )
-        
-        metrics = predictor.train(df, test_size=config.model.test_size)
-        
-        # 3. Подготовка метаданных
-        logger.info("Step 3: Preparing model metadata")
-        metadata = predictor.get_model_metadata(metrics)
-        
-        # 4. Сохранение модели с ротацией
-        logger.info("Step 4: Saving model with rotation")
-        model_name = storage.rotate_models(predictor.model, metadata)
-        current_model_name = model_name
-        
-        logger.info("=== MODEL TRAINING COMPLETED SUCCESSFULLY ===")
-        logger.info(f"Final metrics: R² = {metrics['r2']:.4f}, RMSE = {metrics['rmse']:.2f}")
-        
-    except Exception as e:
-        logger.error(f"Training failed: {e}")
-        raise
-    finally:
-        is_training = False
