@@ -135,59 +135,43 @@ class ModelStorage:
                 self.logger.error("Predictor has no model!")
                 raise ValueError("Predictor has no trained model")
             
-            # ПОДГОТОВКА: переименовываем старые модели ПЕРЕД сохранением новой
-            renamed_models = []
-            for old_name in all_models:
-                if old_name.startswith("model_") and old_name != "model_latest.pkl":
-                    # Извлекаем номер если есть
-                    if old_name.startswith("model_") and old_name.endswith(".pkl"):
-                        name_part = old_name[6:-4]  # убираем 'model_' и '.pkl'
-                        if name_part.isdigit():
-                            old_num = int(name_part)
-                            new_num = old_num + 1
-                            new_name = f"model_{new_num}.pkl"
-                        else:
-                            # Если нет номера, начинаем с 1
-                            new_name = "model_1.pkl"
-                    else:
-                        new_name = "model_1.pkl"
-                    
-                    # Копируем с новым именем
-                    try:
-                        self.client.copy_object(
-                            self.config.bucket_name,
-                            new_name,
-                            f"{self.config.bucket_name}/{old_name}"
-                        )
-                        renamed_models.append((old_name, new_name))
-                        self.logger.info(f"Renamed {old_name} to {new_name}")
-                    except Exception as e:
-                        self.logger.error(f"Error renaming {old_name} to {new_name}: {e}")
-            
-            # Удаляем старые модели после успешного копирования
-            for old_name, _ in renamed_models:
-                try:
-                    self.client.remove_object(self.config.bucket_name, old_name)
-                    self.logger.info(f"Removed old model: {old_name}")
-                except Exception as e:
-                    self.logger.error(f"Error removing old model {old_name}: {e}")
-            
-            # Теперь удаляем старый model_latest.pkl если он есть
+            # Если есть старая модель model_latest.pkl, переименовываем ее
             if "model_latest.pkl" in all_models:
                 try:
-                    self.client.remove_object(
-                        self.config.bucket_name, 
-                        "model_latest.pkl"
+                    # Находим следующий номер
+                    existing_numbers = []
+                    for model_name in all_models:
+                        if model_name.startswith("model_") and model_name.endswith(".pkl"):
+                            name_part = model_name[6:-4]
+                            if name_part.isdigit():
+                                existing_numbers.append(int(name_part))
+                    
+                    next_number = 1
+                    if existing_numbers:
+                        next_number = max(existing_numbers) + 1
+                    
+                    new_name = f"model_{next_number}.pkl"
+                    
+                    # Копируем старый model_latest.pkl с новым именем
+                    # Используем правильный формат CopySource
+                    from minio.commonconfig import CopySource
+                    
+                    copy_source = CopySource(
+                        bucket_name=self.config.bucket_name,
+                        object_name="model_latest.pkl"
                     )
-                    self.logger.info("Removed old model_latest.pkl")
+                    
+                    self.client.copy_object(
+                        bucket_name=self.config.bucket_name,
+                        object_name=new_name,
+                        source=copy_source
+                    )
+                    self.logger.info(f"Archived old model as: {new_name}")
+                    
                 except Exception as e:
-                    self.logger.error(f"Error removing old model_latest.pkl: {e}")
+                    self.logger.error(f"Error archiving old model: {e}")
             
-            # Ждем немного для консистентности
-            import time
-            time.sleep(0.5)
-            
-            # Подготавливаем данные для сохранения новой модели
+            # Сохраняем новую модель
             model_data = {
                 'model': new_predictor.model,
                 'label_encoders': new_predictor.label_encoders,
@@ -199,36 +183,20 @@ class ModelStorage:
                 'metadata': model_metadata
             }
             
-            self.logger.info(f"Prepared model data with keys: {list(model_data.keys())}")
-            
-            # Сохраняем новую модель как model_latest.pkl
             self.save_model(model_data, "model_latest.pkl", model_metadata)
             self.logger.info("Saved new model as model_latest.pkl")
             
-            # Даем время на сохранение
+            # Проверяем результат
+            import time
             time.sleep(0.5)
             
-            # Проверим, что модель действительно сохранилась
-            for attempt in range(3):  # 3 попытки
-                updated_models = self.list_models("model_")
-                self.logger.info(f"Attempt {attempt + 1}: Models in storage: {updated_models}")
-                
-                if "model_latest.pkl" in updated_models:
-                    self.logger.info("✓ New model successfully found in storage")
-                    break
-                elif attempt < 2:
-                    time.sleep(1)  # Ждем секунду и проверяем снова
-                else:
-                    self.logger.warning("⚠ New model not immediately visible in storage list")
+            final_models = self.list_models("model_")
+            self.logger.info(f"Final models: {final_models}")
             
-            self.logger.info("Model rotation completed successfully")
             return "model_latest.pkl"
             
-        except S3Error as e:
-            self.logger.error(f"MinIO error during model rotation: {e}")
-            raise
         except Exception as e:
-            self.logger.error(f"Error during model rotation: {e}", exc_info=True)
+            self.logger.error(f"Error in rotate_models: {e}", exc_info=True)
             raise
 
     def delete_all_models(self, prefix: str = "") -> dict:

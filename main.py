@@ -173,14 +173,6 @@ async def train_model_task():
     finally:
         is_training = False
 
-@app.get("/training-status")
-async def get_training_status():
-    """Статус обучения модели"""
-    return {
-        "is_finished_training": not is_training,
-        "timestamp": datetime.now().isoformat()
-    }
-
 @app.get("/models")
 async def list_models():
     """Список доступных моделей"""
@@ -267,24 +259,6 @@ async def get_current_model_info():
         "feature_columns": predictor.feature_columns if predictor.feature_columns else [],
         "training_date": predictor.training_date.isoformat() if predictor.training_date else None,
         "metrics": predictor.metrics
-    }
-
-@app.get("/")
-async def root():
-    """Корневой endpoint с информацией о сервисе"""
-    return {
-        "message": "ML Trainer and Predictor Service",
-        "version": "1.0.0",
-        "endpoints": {
-            "train": "POST /train - Train a new model",
-            "predict": "POST /predict - Make a prediction (uses latest model)",
-            "training_status": "GET /training-status - Check training status",
-            "list_models": "GET /models - List available models",
-            "delete_models": "DELETE /models - Delete all models",
-            "current_model": "GET /model/current - Get current model info",
-            "load_model": "POST /model/load/{model_name} - Load specific model",
-            "health": "GET /health - Health check"
-        }
     }
 
 if __name__ == "__main__":

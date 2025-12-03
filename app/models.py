@@ -47,9 +47,7 @@ class RouteTimePredictor:
         
         return X, y
     
-    def train(self, df: pd.DataFrame, test_size: float = 0.2, 
-              model_storage=None, save_model: bool = False, 
-              model_name: str = "model_latest.pkl") -> Dict[str, Any]:
+    def train(self, df: pd.DataFrame, test_size: float = 0.2) -> Dict[str, Any]:
         """Обучение модели с опциональным сохранением"""
         self.logger.info("Starting model training")
         self.training_date = datetime.now()
@@ -101,32 +99,6 @@ class RouteTimePredictor:
         self.logger.info(f"Training metrics: {self.metrics}")
         
         return self.metrics
-    
-    def _save_model_to_storage(self, model_storage, model_name: str):
-        """Внутренний метод сохранения модели через ModelStorage"""
-        try:
-            self.logger.info(f"Saving model to storage: {model_name}")
-            
-            # Подготавливаем данные модели
-            model_data = {
-                'model': self.model,
-                'label_encoders': self.label_encoders,
-                'feature_columns': self.feature_columns,
-                'scaler': self.scaler,
-                'model_type': self.model_type,
-                'random_state': self.random_state,
-                'training_date': self.training_date,
-                'metadata': self.get_model_metadata()
-            }
-            
-            # Сохраняем через ModelStorage
-            model_storage.save_model(model_data, model_name)
-            
-            self.logger.info(f"Model saved successfully to storage: {model_name}")
-            
-        except Exception as e:
-            self.logger.error(f"Error saving model to storage: {e}")
-            raise
     
     def get_model_metadata(self, metrics: Dict[str, Any] = None) -> Dict[str, Any]:
         """Метаданные обученной модели"""
