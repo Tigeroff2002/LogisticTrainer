@@ -5,7 +5,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 import logging
-from typing import Tuple, Dict, Any
+from typing import Tuple, Dict, Any, List, Optional
+from datetime import datetime
 
 class RouteTimePredictor:
     def __init__(self, model_type: str = "random_forest", random_state: int = 42):
@@ -14,6 +15,9 @@ class RouteTimePredictor:
         self.model = None
         self.label_encoders = {}
         self.scaler = StandardScaler()
+        self.feature_columns = None
+        self.training_date = None
+        self.metrics = None
         self.logger = logging.getLogger(__name__)
         
     def prepare_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
@@ -26,28 +30,29 @@ class RouteTimePredictor:
         # Целевая переменная
         y = data['duration_seconds']
         
-        # Признаки
-        feature_columns = ['start_fav_area_id', 'end_fav_area_id', 'month', 
-                          'time_of_day', 'day_of_week', 'number_of_rides']
+        self.feature_columns = ['user_id', 'start_fav_area_id', 'end_fav_area_id', 
+                                'month_of_year', 'time_of_day', 'day_of_week']
         
-        X = data[feature_columns]
+        X = data[self.feature_columns]
         
-        # Кодируем категориальные переменные
-        categorical_columns = ['time_of_day']
+        categorical_columns = ['time_of_day', 'month_of_year', 'day_of_week']
         for col in categorical_columns:
             if col in X.columns:
                 self.logger.info(f"Encoding categorical column: {col}")
                 self.label_encoders[col] = LabelEncoder()
                 X[col] = self.label_encoders[col].fit_transform(X[col])
         
-        self.logger.info(f"Features shape: {X.shape}")
+        self.logger.info(f"Features shape: {X.shape}, columns: {X.columns.tolist()}")
         self.logger.info(f"Target shape: {y.shape}")
         
         return X, y
     
-    def train(self, df: pd.DataFrame, test_size: float = 0.2) -> Dict[str, Any]:
-        """Обучение модели"""
+    def train(self, df: pd.DataFrame, test_size: float = 0.2, 
+              model_storage=None, save_model: bool = False, 
+              model_name: str = "model_latest.pkl") -> Dict[str, Any]:
+        """Обучение модели с опциональным сохранением"""
         self.logger.info("Starting model training")
+        self.training_date = datetime.now()
         
         # Подготовка данных
         X, y = self.prepare_features(df)
@@ -76,10 +81,14 @@ class RouteTimePredictor:
         self.model.fit(X_train, y_train)
         self.logger.info("Model training completed")
         
+        # Сохраняем feature_names для будущих предсказаний
+        self.feature_columns = X.columns.tolist()
+        self.logger.info(f"Saved feature columns: {self.feature_columns}")
+        
         # Предсказание и метрики
         y_pred = self.model.predict(X_test)
         
-        metrics = {
+        self.metrics = {
             'mae': mean_absolute_error(y_test, y_pred),
             'mse': mean_squared_error(y_test, y_pred),
             'rmse': np.sqrt(mean_squared_error(y_test, y_pred)),
@@ -89,16 +98,130 @@ class RouteTimePredictor:
             'feature_importance': dict(zip(X.columns, self.model.feature_importances_))
         }
         
-        self.logger.info(f"Training metrics: {metrics}")
+        self.logger.info(f"Training metrics: {self.metrics}")
         
-        return metrics
+        # Сохранение модели если требуется
+        if save_model and model_storage:
+            self._save_model_to_storage(model_storage, model_name)
+        
+        return self.metrics
     
-    def get_model_metadata(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+    def _save_model_to_storage(self, model_storage, model_name: str):
+        """Внутренний метод сохранения модели через ModelStorage"""
+        try:
+            self.logger.info(f"Saving model to storage: {model_name}")
+            
+            # Подготавливаем данные модели
+            model_data = {
+                'model': self.model,
+                'label_encoders': self.label_encoders,
+                'feature_columns': self.feature_columns,
+                'scaler': self.scaler,
+                'model_type': self.model_type,
+                'random_state': self.random_state,
+                'training_date': self.training_date,
+                'metadata': self.get_model_metadata()
+            }
+            
+            # Сохраняем через ModelStorage
+            model_storage.save_model(model_data, model_name)
+            
+            self.logger.info(f"Model saved successfully to storage: {model_name}")
+            
+        except Exception as e:
+            self.logger.error(f"Error saving model to storage: {e}")
+            raise
+    
+    def get_model_metadata(self, metrics: Dict[str, Any] = None) -> Dict[str, Any]:
         """Метаданные обученной модели"""
-        return {
+        if metrics is None:
+            metrics = self.metrics
+            
+        metadata = {
             'model_type': self.model_type,
-            'training_date': pd.Timestamp.now().isoformat(),
-            'metrics': metrics,
-            'feature_columns': list(self.label_encoders.keys()),
-            'model_class': self.model.__class__.__name__
+            'training_date': self.training_date.isoformat() if self.training_date else datetime.now().isoformat(),
+            'random_state': self.random_state,
+            'feature_columns': self.feature_columns,
+            'categorical_columns': list(self.label_encoders.keys()),
+            'model_class': self.model.__class__.__name__ if self.model else None,
+            'has_scaler': self.scaler is not None,
+            'metrics': metrics
         }
+        
+        # Добавляем информацию о label encoders
+        for col, encoder in self.label_encoders.items():
+            metadata[f'{col}_classes'] = encoder.classes_.tolist()
+            metadata[f'{col}_classes_count'] = len(encoder.classes_)
+            
+        return metadata
+    
+    def predict_single(self, input_data: Dict[str, Any]) -> float:
+        """Предсказание для одного примера"""
+        try:
+            self.logger.info(f"Starting prediction for input data: {input_data}")
+            
+            # Создаем DataFrame из входных данных
+            input_df = pd.DataFrame([input_data])
+            self.logger.debug(f"Created DataFrame with columns: {input_df.columns.tolist()}")
+            
+            # Преобразуем категориальные переменные
+            for col, encoder in self.label_encoders.items():
+                if col in input_df.columns:
+                    original_value = input_df[col].iloc[0]
+                    self.logger.debug(f"Processing categorical column '{col}' with value: {original_value}")
+                    
+                    # Проверяем, есть ли значение в кодировщике
+                    if original_value in encoder.classes_:
+                        encoded_value = encoder.transform([original_value])[0]
+                        input_df.loc[:, col] = encoded_value
+                        self.logger.debug(f"Encoded '{original_value}' to {encoded_value} for column '{col}'")
+                    else:
+                        # Если значение новое, используем "unknown" класс
+                        self.logger.warning(f"Unknown value '{original_value}' for column '{col}'. Available classes: {encoder.classes_.tolist()}")
+                        # Используем наиболее частый класс
+                        if len(encoder.classes_) > 0:
+                            default_value = encoder.transform([encoder.classes_[0]])[0]
+                        else:
+                            default_value = 0
+                        input_df.loc[:, col] = default_value
+                        self.logger.info(f"Using default value {default_value} for unknown category in column '{col}'")
+            
+            # Убедимся, что все нужные колонки присутствуют
+            if self.feature_columns:
+                self.logger.debug(f"Expected feature columns: {self.feature_columns}")
+                self.logger.debug(f"Current DataFrame columns: {input_df.columns.tolist()}")
+                
+                # Добавляем отсутствующие колонки
+                missing_cols = [col for col in self.feature_columns if col not in input_df.columns]
+                if missing_cols:
+                    self.logger.warning(f"Missing columns in input data: {missing_cols}. Adding with default value 0")
+                    for col in missing_cols:
+                        input_df[col] = 0
+                
+                # Выбираем только нужные фичи в правильном порядке
+                X = input_df[self.feature_columns]
+            else:
+                self.logger.warning("feature_columns is empty, using all available columns")
+                X = input_df
+            
+            self.logger.debug(f"Final feature matrix shape: {X.shape}")
+            self.logger.debug(f"Feature matrix columns: {X.columns.tolist()}")
+            
+            # Проверяем модель
+            if self.model is None:
+                self.logger.error("Model is not loaded or initialized")
+                raise ValueError("Model is not loaded or initialized")
+            
+            # Делаем предсказание
+            self.logger.info("Making prediction...")
+            prediction = self.model.predict(X)[0]
+            self.logger.info(f"Prediction result: {prediction}")
+            
+            return float(prediction)
+            
+        except Exception as e:
+            self.logger.error(f"Error during prediction: {e}", exc_info=True)
+            self.logger.error(f"Input data that caused error: {input_data}")
+            self.logger.error(f"DataFrame columns: {locals().get('input_df', pd.DataFrame()).columns.tolist() if 'input_df' in locals() else 'DataFrame not created'}")
+            self.logger.error(f"Feature columns from model: {self.feature_columns}")
+            raise

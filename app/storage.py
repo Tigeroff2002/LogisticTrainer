@@ -1,10 +1,10 @@
 from minio import Minio
 from minio.error import S3Error
-import joblib
 import io
 import logging
 from typing import List, Optional
 from app.config import Config
+import pickle
 
 class ModelStorage:
     def __init__(self, config: Config):
@@ -40,6 +40,21 @@ class ModelStorage:
         except S3Error as e:
             self.logger.error(f"Error listing models: {e}")
             return []
+        
+    def get_model(self, model_name: str) -> bytes:
+        """Получение модели из MinIO"""
+        try:
+            response = self.client.get_object(
+                self.config.bucket_name,  # ← Исправьте здесь
+                model_name
+            )
+            model_bytes = response.read()
+            response.close()
+            response.release_conn()
+            return model_bytes
+        except Exception as e:
+            self.logger.error(f"Failed to get model {model_name}: {e}")
+            raise
 
     def get_model_count(self) -> int:
         """Получение количества существующих моделей"""
@@ -51,7 +66,7 @@ class ModelStorage:
         try:
             # Сериализация модели
             model_bytes = io.BytesIO()
-            joblib.dump(model, model_bytes)
+            pickle.dump(model, model_bytes)  # ← Используем pickle вместо joblib
             model_bytes.seek(0)
             
             # Загрузка в MinIO
@@ -118,3 +133,43 @@ class ModelStorage:
         except S3Error as e:
             self.logger.error(f"Error during model rotation: {e}")
             raise
+
+    def delete_all_models(self, prefix: str = "") -> dict:
+        """Удаление всех моделей с заданным префиксом"""
+        try:
+            self.logger.info(f"Deleting all models with prefix: '{prefix}'")
+            
+            deleted_count = 0
+            errors = []
+            
+            # Получаем список всех объектов с заданным префиксом
+            objects = self.client.list_objects(
+                self.config.bucket_name,
+                prefix=prefix,
+                recursive=True
+            )
+            
+            for obj in objects:
+                try:
+                    self.client.remove_object(self.config.bucket_name, obj.object_name)
+                    deleted_count += 1
+                    self.logger.info(f"Deleted: {obj.object_name}")
+                except Exception as e:
+                    error_msg = f"Error deleting {obj.object_name}: {e}"
+                    errors.append(error_msg)
+                    self.logger.error(error_msg)
+            
+            return {
+                'status': 'success' if not errors else 'partial_success',
+                'deleted_count': deleted_count,
+                'errors': errors if errors else None
+            }
+            
+        except Exception as e:
+            error_msg = f"Error deleting models: {e}"
+            self.logger.error(error_msg)
+            return {
+                'status': 'error',
+                'message': error_msg,
+                'deleted_count': 0
+            }

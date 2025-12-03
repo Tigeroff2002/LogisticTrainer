@@ -38,18 +38,18 @@ class DatabaseService:
         
         query = """
         SELECT 
+            uh.id,
+            user_id,
             start_fav_area_id,
             end_fav_area_id,
-            EXTRACT(MONTH FROM month_of_year) as month,
-            tod.name as time_of_day,
-            EXTRACT(DOW FROM day_of_week) as day_of_week,
+            month_of_year,
+            CONCAT(tod.start_range, ':', tod.end_range) as time_of_day,
+            day_of_week,
             number_of_rides,
             EXTRACT(EPOCH FROM average_duration) as duration_seconds
         FROM users_history_directory uh
         JOIN time_of_day_directory tod ON uh.time_of_day_directory_id = tod.id
-        WHERE number_of_rides > 0
-        AND average_duration > INTERVAL '0 seconds'
-        ORDER BY uh.created_at DESC
+        ORDER BY uh.id ASC
         LIMIT 100000
         """
         
@@ -61,7 +61,7 @@ class DatabaseService:
             # Конвертируем в DataFrame
             df = pd.DataFrame(
                 [dict(record) for record in records],
-                columns=['start_fav_area_id', 'end_fav_area_id', 'month', 
+                columns=['user_id', 'start_fav_area_id', 'end_fav_area_id', 'month_of_year', 
                         'time_of_day', 'day_of_week', 'number_of_rides', 'duration_seconds']
             )
             
