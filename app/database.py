@@ -45,8 +45,7 @@ class DatabaseService:
             month_of_year,
             CONCAT(tod.start_range, ':', tod.end_range) as time_of_day,
             day_of_week,
-            number_of_rides,
-            EXTRACT(EPOCH FROM average_duration) as duration_seconds
+            EXTRACT(EPOCH FROM duration) as duration_seconds
         FROM users_history_directory uh
         JOIN time_of_day_directory tod ON uh.time_of_day_directory_id = tod.id
         ORDER BY uh.id ASC
