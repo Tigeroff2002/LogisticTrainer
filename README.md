@@ -107,3 +107,5 @@ CREATE TABLE users_history_directory (
         REFERENCES time_of_day_directory (id));
 
 Там я кинул dump.sql файл моей БД локальной - его можно применить, там все данные сохранены
+
+S C:\Program Files\PostgreSQL\17\bin> .\psql -U postgres -d logistic_salesman_db -f dump.sql
