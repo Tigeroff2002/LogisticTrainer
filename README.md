@@ -2,6 +2,9 @@
 
 По адресу http://127.0.0.1:8000/docs# доступен Swagger
 
+Запуск minio:
+docker run -d -p 9000:9000 -p 9001:9001 --name minio -v minio_data:/data -e "MINIO_ROOT_USER=minioadmin" -e "MINIO_ROOT_PASSWORD=minioadmin" minio/minio server /data --console-address ":9001"
+
 Основной акцент я планировал сделать тут на уточнение времени пути
 От OSRM GEO API я получаю некоторый expected_time - но он может быть уточнен исходя из разреза времени
 А именно параметров time_of_day_directory_id (приоритет 1), day_of_week (приоритет 2), month_of_year (приоритет 3)
@@ -26,8 +29,8 @@ CREATE TYPE area_type AS ENUM (
     'medium',  -- area on range [30, 100]m
     'complex'); -- area on range over 100m
 
-# Таблица с избранными областями 
-# (концентрированные области разного радиуса с точками, в которых пользователи начинали/заканчивали маршруты)
+Таблица с избранными областями 
+(концентрированные области разного радиуса с точками, в которых пользователи начинали заканчивали маршруты)
 CREATE TABLE favorite_areas(
     id bigint GENERATED ALWAYS AS IDENTITY,
     user_id bigint NOT NULL,
@@ -39,7 +42,7 @@ CREATE TABLE favorite_areas(
         FOREIGN KEY (user_id)
         REFERENCES users (id) ON DELETE CASCADE);
 
-# Справочник с временными рэнджами в течении дня
+Справочник с временными рэнджами в течении дня
 CREATE TABLE time_of_day_directory(
     id bigint GENERATED ALWAYS AS IDENTITY,
     start_range INTERVAL NOT NULL,
@@ -78,7 +81,7 @@ CREATE TYPE month_of_year AS ENUM (
     'november',
     'december');
 
-# Основная таблица, наполяемая данными при финализации маршрутов
+Основная таблица, наполяемая данными при финализации маршрутов
 CREATE TABLE users_history_directory (
     id bigint GENERATED ALWAYS AS IDENTITY,
     user_id bigint NOT NULL,
