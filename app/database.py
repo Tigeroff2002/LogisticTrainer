@@ -39,15 +39,20 @@ class DatabaseService:
         query = """
         SELECT 
             uh.id,
-            user_id,
-            start_fav_area_id,
-            end_fav_area_id,
+            uh.user_id,
+            fas.width as start_width,
+            fas.height as start_height,
+            fae.width as end_width,
+            fae.height as end_height,            
             month_of_year,
             CONCAT(tod.start_range, ':', tod.end_range) as time_of_day,
             day_of_week,
-            EXTRACT(EPOCH FROM duration) as duration_seconds
+            EXTRACT(EPOCH FROM expected_duration) as expected_duration_seconds,
+            EXTRACT(EPOCH FROM duration) as actual_duration_seconds
         FROM users_history_directory uh
         JOIN time_of_day_directory tod ON uh.time_of_day_directory_id = tod.id
+        JOIN favorite_areas fas ON uh.start_fav_area_id = fas.id
+        JOIN favorite_areas fae ON uh.end_fav_area_id = fae.id
         ORDER BY uh.id ASC
         LIMIT 100000
         """
@@ -60,8 +65,8 @@ class DatabaseService:
             # Конвертируем в DataFrame
             df = pd.DataFrame(
                 [dict(record) for record in records],
-                columns=['user_id', 'start_fav_area_id', 'end_fav_area_id', 'month_of_year', 
-                        'time_of_day', 'day_of_week', 'number_of_rides', 'duration_seconds']
+                columns=['user_id', 'start_width', 'start_height', 'end_width', 'end_height', 'month_of_year', 
+                        'time_of_day', 'day_of_week', 'expected_duration_seconds', 'actual_duration_seconds']
             )
             
             self.logger.info(f"Training data shape: {df.shape}")

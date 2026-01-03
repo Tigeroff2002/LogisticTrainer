@@ -28,10 +28,11 @@ class RouteTimePredictor:
         data = df.copy()
         
         # Целевая переменная
-        y = data['duration_seconds']
+        y = data['actual_duration_seconds']
         
-        self.feature_columns = ['user_id', 'start_fav_area_id', 'end_fav_area_id', 
-                                'month_of_year', 'time_of_day', 'day_of_week']
+        self.feature_columns = ['user_id', 'start_width', 'start_height', 'end_width',
+                                'end_height', 'month_of_year', 'time_of_day',
+                                'day_of_week', 'expected_duration_seconds']
         
         X = data[self.feature_columns]
         

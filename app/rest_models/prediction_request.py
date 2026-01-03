@@ -3,8 +3,10 @@ from typing import Optional
 
 class PredictionRequest(BaseModel):
     user_id: int = Field(..., description="ID пользователя")
-    start_fav_area_id: int = Field(..., description="ID начальной зоны")
-    end_fav_area_id: int = Field(..., description="ID конечной зоны")
+    start_x: float = Field(..., description="Широта начальной точки")
+    start_y: float = Field(..., description="Долгота начальной точки")
+    end_x: float = Field(..., description="Широта конечной точки")
+    end_y: float = Field(..., description="Долгота конечной точки")
     month_of_year: str = Field(
         ..., 
         description="Месяц года",
@@ -20,6 +22,7 @@ class PredictionRequest(BaseModel):
         description="День недели",
         example="monday"
     )
+    expected_duration_seconds: float = Field(..., description="Сырое время, предсказанное провайдером")
     
     @validator('month_of_year')
     def validate_month(cls, v):

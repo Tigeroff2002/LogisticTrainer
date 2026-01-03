@@ -219,12 +219,15 @@ async def predict_route_time(request: PredictionRequest):
         # Подготавливаем данные для предсказания
         input_data = {
             'user_id': request.user_id,
-            'start_fav_area_id': request.start_fav_area_id,
-            'end_fav_area_id': request.end_fav_area_id,
+            'start_width': request.start_x,
+            'start_height': request.start_y,
+            'end_width': request.end_x,
+            'end_height': request.end_y,
             'month_of_year': request.month_of_year,
             'time_of_day': request.time_of_day,
             'day_of_week': request.day_of_week,
-            'duration_seconds': 0  # Добавляем как placeholder
+            'expected_duration_seconds': request.expected_duration_seconds,
+            'actual_duration_seconds': 0 # placeholder
         }
         
         # Делаем предсказание
