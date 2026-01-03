@@ -8,6 +8,10 @@ import pandas as pd
 
 from app.rest_models.prediction_request import PredictionRequest
 from app.rest_models.prediction_response import PredictionResponse
+
+from app.rest_models.matrix_prediction_request import MatrixPredictionRequest
+from app.rest_models.matrix_prediction_response import MatrixPredictionResponse
+
 from app.rest_models.training_response import TrainingResponse
 
 logging.basicConfig(
@@ -247,6 +251,65 @@ async def predict_route_time(request: PredictionRequest):
         raise HTTPException(
             status_code=500, 
             detail=f"Prediction failed: {str(e)}"
+        )
+    
+@app.post("/predict/matrix", response_model=MatrixPredictionResponse)
+async def predict_route_matrix(request: MatrixPredictionRequest):
+    """
+    Предсказание времени для матрицы маршрутов
+    
+    Возвращает матрицу N x N предсказанных времен в секундах.
+    """
+    try:
+        predictor = get_current_predictor()
+        
+        if predictor is None or predictor.model is None:
+            raise HTTPException(
+                status_code=404, 
+                detail="No trained models available. Please train a model first."
+            )
+        
+        n = len(request.matrix)
+        predicted_matrix = [[0.0] * n for _ in range(n)]
+        
+        # Обрабатываем каждый элемент матрицы
+        for i in range(n):
+            for j in range(n):
+                element = request.matrix[i][j]
+                
+                # Подготавливаем данные для предсказания
+                input_data = {
+                    'user_id': request.user_id,
+                    'start_width': element.start_x,  # Используем start_x
+                    'start_height': element.start_y,  # Используем start_y
+                    'end_width': element.end_x,       # Используем end_x
+                    'end_height': element.end_y,      # Используем end_y
+                    'month_of_year': request.month_of_year,
+                    'time_of_day': request.time_of_day,
+                    'day_of_week': request.day_of_week,
+                    'expected_duration_seconds': element.expected_duration_seconds or 0,
+                    'actual_duration_seconds': 0  # placeholder
+                }
+                
+                # Делаем предсказание
+                predicted_duration = predictor.predict_single(input_data)
+                predicted_matrix[i][j] = float(predicted_duration)
+        
+        # Формируем ответ
+        return MatrixPredictionResponse(
+            predicted_durations=predicted_matrix,
+            model_used=current_model_name if current_model_name else 'unknown_model',
+            prediction_timestamp=datetime.now().isoformat(),
+            matrix_size=n
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Matrix prediction error: {e}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Matrix prediction failed: {str(e)}"
         )
 
 @app.get("/model/current")
