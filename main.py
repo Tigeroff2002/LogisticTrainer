@@ -11,6 +11,7 @@ from app.rest_models.prediction_response import PredictionResponse
 
 from app.rest_models.matrix_prediction_request import MatrixPredictionRequest
 from app.rest_models.matrix_prediction_response import MatrixPredictionResponse
+from app.rest_models.matrix_prediction_response_v2 import MatrixPredictionResponseV2
 
 from app.rest_models.training_response import TrainingResponse
 
@@ -317,6 +318,90 @@ async def predict_route_matrix(request: MatrixPredictionRequest):
         raise HTTPException(
             status_code=500, 
             detail=f"Matrix prediction failed: {str(e)}"
+        )
+    
+@app.post("/predict/matrix/v2", response_model=MatrixPredictionResponseV2)
+async def predict_route_matrix_v2(request: MatrixPredictionRequest):
+    """
+    Предсказание времени для матрицы маршрутов
+    
+    Возвращает динамическую матрицу N x N предсказанных времен в секундах.
+    """
+    try:
+        predictor = get_current_predictor()
+        
+        if predictor is None or predictor.model is None:
+            raise HTTPException(
+                status_code=404, 
+                detail="No trained models available. Please train a model first."
+            )
+        
+        n = len(request.matrix)
+        
+        batch_data = []
+
+        time_of_day_range = [
+            "01:00:00:06:00:00",
+            "06:00:00:09:00:00", 
+            "09:00:00:12:00:00",
+            "12:00:00:14:00:00",
+            "14:00:00:16:30:00",
+            "16:30:00:19:00:00",
+            "19:00:00:22:00:00",
+            "22:00:00:01:00:00"
+            ]
+
+        for i in range(n):
+            for j in range(n):
+                element = request.matrix[i][j]
+                elementRange = []
+                for k in time_of_day_range:
+                    elementRange.append({
+                        'user_id': request.user_id,
+                        'start_width': element.start_x,
+                        'start_height': element.start_y,
+                        'end_width': element.end_x,
+                        'end_height': element.end_y,
+                        'month_of_year': request.month_of_year,
+                        'time_of_day': k,
+                        'day_of_week': request.day_of_week,
+                        'expected_duration_seconds': element.expected_duration_seconds or 0,
+                        'actual_duration_seconds': 0
+                    })
+                batch_data.append(elementRange)
+        
+        start_time = datetime.now()
+
+        predictions_count = len(batch_data) * len(time_of_day_range)
+
+        logger.info(f"Start processing {predictions_count} batches")
+
+        predictions = predictor.predict_batch(batch_data)
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Batch prediction for {predictions_count} samples took {elapsed:.3f} seconds")
+        
+        predicted_matrix = []
+        for i in range(n):
+            row = []
+            for j in range(0, n):
+                element = []
+                for k in range(0, 8):
+                    element.append(float(predictions[j * 8 + k]))
+                row.append(element)
+            predicted_matrix.append(row)
+        
+        return MatrixPredictionResponseV2(
+            predicted_durations=predicted_matrix,
+            model_used=current_model_name if current_model_name else 'unknown_model',
+            prediction_timestamp=datetime.now().isoformat(),
+            matrix_size=n
+        )
+        
+    except Exception as e:
+        logger.error(f"Matrix prediction error: {str(e)}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Matrix prediction failed"
         )
 
 @app.get("/model/current")

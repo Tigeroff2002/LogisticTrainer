@@ -195,14 +195,16 @@ class RouteTimePredictor:
             self.logger.error(f"Feature columns from model: {self.feature_columns}")
             raise
 
-    def predict_batch(self, batch_data: List[Dict[str, Any]]) -> List[float]:
+    def predict_batch(self, batch_data: List[List[Dict[str, Any]]]) -> List[float]:
         """Предсказание для батча данных (оптимизированное)"""
         try:
             if not batch_data:
                 return []
             
+            flat_list = [item for sublist in batch_data for item in sublist]
+            
             # Создаем DataFrame из ВСЕХ данных сразу
-            input_df = pd.DataFrame(batch_data)
+            input_df = pd.DataFrame(flat_list)
             
             # КАТЕГОРИАЛЬНЫЕ ПЕРЕМЕННЫЕ - оптимизированная обработка
             for col, encoder in self.label_encoders.items():
