@@ -5,10 +5,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Optional, Dict
 import pandas as pd
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
-import numpy as np
-import os
 
 from app.rest_models.prediction_request import PredictionRequest
 from app.rest_models.prediction_response import PredictionResponse
@@ -259,6 +255,11 @@ async def predict_route_time(request: PredictionRequest):
     
 @app.post("/predict/matrix", response_model=MatrixPredictionResponse)
 async def predict_route_matrix(request: MatrixPredictionRequest):
+    """
+    Предсказание времени для матрицы маршрутов
+    
+    Возвращает матрицу N x N предсказанных времен в секундах.
+    """
     try:
         predictor = get_current_predictor()
         
@@ -269,59 +270,32 @@ async def predict_route_matrix(request: MatrixPredictionRequest):
             )
         
         n = len(request.matrix)
+        predicted_matrix = [[0.0] * n for _ in range(n)]
         
-        # Подготавливаем все данные для предсказания
-        prediction_inputs = []
-        positions = []  # Сохраняем позиции (i, j)
-        
+        # Обрабатываем каждый элемент матрицы
         for i in range(n):
             for j in range(n):
                 element = request.matrix[i][j]
+                
+                # Подготавливаем данные для предсказания
                 input_data = {
                     'user_id': request.user_id,
-                    'start_width': element.start_x,
-                    'start_height': element.start_y,
-                    'end_width': element.end_x,
-                    'end_height': element.end_y,
+                    'start_width': element.start_x,  # Используем start_x
+                    'start_height': element.start_y,  # Используем start_y
+                    'end_width': element.end_x,       # Используем end_x
+                    'end_height': element.end_y,      # Используем end_y
                     'month_of_year': request.month_of_year,
                     'time_of_day': request.time_of_day,
                     'day_of_week': request.day_of_week,
                     'expected_duration_seconds': element.expected_duration_seconds or 0,
-                    'actual_duration_seconds': 0
+                    'actual_duration_seconds': 0  # placeholder
                 }
-                prediction_inputs.append(input_data)
-                positions.append((i, j))
-        
-        # Параллельное предсказание
-        predicted_matrix = [[0.0] * n for _ in range(n)]
-        
-        # Вариант A: ThreadPoolExecutor (лучше для I/O или GIL-bound операций)
-        async def predict_batch_parallel():
-            loop = asyncio.get_event_loop()
-            with ThreadPoolExecutor(max_workers=min(32, os.cpu_count() * 4)) as executor:
-                futures = []
-                for input_data in prediction_inputs:
-                    future = loop.run_in_executor(
-                        executor, 
-                        predictor.predict_single, 
-                        input_data
-                    )
-                    futures.append(future)
                 
-                # Ждем все результаты
-                results = await asyncio.gather(*futures, return_exceptions=True)
-                return results
+                # Делаем предсказание
+                predicted_duration = predictor.predict_single(input_data)
+                predicted_matrix[i][j] = float(predicted_duration)
         
-        results = await predict_batch_parallel()
-        
-        # Заполняем матрицу результатами
-        for idx, (i, j) in enumerate(positions):
-            if isinstance(results[idx], Exception):
-                logger.error(f"Prediction failed for position ({i},{j}): {results[idx]}")
-                predicted_matrix[i][j] = 0.0  # или значение по умолчанию
-            else:
-                predicted_matrix[i][j] = float(results[idx])
-        
+        # Формируем ответ
         return MatrixPredictionResponse(
             predicted_durations=predicted_matrix,
             model_used=current_model_name if current_model_name else 'unknown_model',
@@ -329,6 +303,8 @@ async def predict_route_matrix(request: MatrixPredictionRequest):
             matrix_size=n
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Matrix prediction error: {e}")
         raise HTTPException(
