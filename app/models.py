@@ -194,3 +194,64 @@ class RouteTimePredictor:
             self.logger.error(f"DataFrame columns: {locals().get('input_df', pd.DataFrame()).columns.tolist() if 'input_df' in locals() else 'DataFrame not created'}")
             self.logger.error(f"Feature columns from model: {self.feature_columns}")
             raise
+
+    def predict_batch(self, batch_data: List[Dict[str, Any]]) -> List[float]:
+        """Предсказание для батча данных (оптимизированное)"""
+        try:
+            if not batch_data:
+                return []
+            
+            # Создаем DataFrame из ВСЕХ данных сразу
+            input_df = pd.DataFrame(batch_data)
+            
+            # КАТЕГОРИАЛЬНЫЕ ПЕРЕМЕННЫЕ - оптимизированная обработка
+            for col, encoder in self.label_encoders.items():
+                if col in input_df.columns:
+                    # Обрабатываем весь столбец целиком
+                    input_df[col] = self._encode_column_batch(input_df[col], encoder)
+            
+            # Убеждаемся в правильности фичей
+            if self.feature_columns:
+                # Добавляем недостающие колонки
+                for col in self.feature_columns:
+                    if col not in input_df.columns:
+                        input_df[col] = 0
+                
+                # Выбираем фичи в правильном порядке
+                X = input_df[self.feature_columns]
+            else:
+                X = input_df
+            
+            # ВСЕГО ОДИН ВЫЗОВ predict для всего батча
+            predictions = self.model.predict(X)
+            
+            return predictions.tolist()
+            
+        except Exception as e:
+            self.logger.error(f"Batch prediction error: {str(e)}")
+            raise
+    
+    def _encode_column_batch(self, series: pd.Series, encoder) -> pd.Series:
+        """Оптимизированное кодирование столбца"""
+        # Создаем маску для неизвестных значений
+        known_mask = series.isin(encoder.classes_)
+        
+        if known_mask.all():
+            # Все значения известны
+            return pd.Series(encoder.transform(series), index=series.index)
+        else:
+            # Есть неизвестные значения
+            result = pd.Series(0, index=series.index, dtype=int)
+            
+            # Кодируем известные значения
+            if known_mask.any():
+                known_values = series[known_mask]
+                result[known_mask] = encoder.transform(known_values)
+            
+            # Неизвестные остаются 0 или можно установить другое значение
+            # Можно логировать предупреждение
+            unknown_count = (~known_mask).sum()
+            if unknown_count > 0:
+                self.logger.warning(f"Found {unknown_count} unknown values in categorical column")
+            
+            return result

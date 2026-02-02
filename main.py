@@ -270,32 +270,41 @@ async def predict_route_matrix(request: MatrixPredictionRequest):
             )
         
         n = len(request.matrix)
-        predicted_matrix = [[0.0] * n for _ in range(n)]
         
-        # Обрабатываем каждый элемент матрицы
+        # 1. Собираем ВСЕ данные в один батч
+        batch_data = []
         for i in range(n):
             for j in range(n):
                 element = request.matrix[i][j]
-                
-                # Подготавливаем данные для предсказания
-                input_data = {
+                batch_data.append({
                     'user_id': request.user_id,
-                    'start_width': element.start_x,  # Используем start_x
-                    'start_height': element.start_y,  # Используем start_y
-                    'end_width': element.end_x,       # Используем end_x
-                    'end_height': element.end_y,      # Используем end_y
+                    'start_width': element.start_x,
+                    'start_height': element.start_y,
+                    'end_width': element.end_x,
+                    'end_height': element.end_y,
                     'month_of_year': request.month_of_year,
                     'time_of_day': request.time_of_day,
                     'day_of_week': request.day_of_week,
                     'expected_duration_seconds': element.expected_duration_seconds or 0,
-                    'actual_duration_seconds': 0  # placeholder
-                }
-                
-                # Делаем предсказание
-                predicted_duration = predictor.predict_single(input_data)
-                predicted_matrix[i][j] = float(predicted_duration)
+                    'actual_duration_seconds': 0
+                })
         
-        # Формируем ответ
+        # 2. ЕДИНСТВЕННЫЙ вызов predict_batch для 100 строк
+        start_time = datetime.now()
+        predictions = predictor.predict_batch(batch_data)
+        elapsed = (datetime.now() - start_time).total_seconds()
+        logger.info(f"Batch prediction for {len(batch_data)} samples took {elapsed:.3f} seconds")
+        
+        # 3. Распределяем результаты по матрице
+        predicted_matrix = []
+        idx = 0
+        for i in range(n):
+            row = []
+            for j in range(n):
+                row.append(float(predictions[idx]))
+                idx += 1
+            predicted_matrix.append(row)
+        
         return MatrixPredictionResponse(
             predicted_durations=predicted_matrix,
             model_used=current_model_name if current_model_name else 'unknown_model',
@@ -303,8 +312,6 @@ async def predict_route_matrix(request: MatrixPredictionRequest):
             matrix_size=n
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Matrix prediction error: {e}")
         raise HTTPException(
