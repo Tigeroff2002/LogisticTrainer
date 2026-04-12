@@ -112,6 +112,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+@app.get("/hc")
+async def health_check():
+    return {"status": "ok"}
+
 @app.post("/train", response_model=TrainingResponse)
 async def train_model(background_tasks: BackgroundTasks):
     """Запуск обучения модели"""
